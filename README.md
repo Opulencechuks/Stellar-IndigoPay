@@ -295,7 +295,7 @@ The full doc tree is indexed in [`docs/README.md`](docs/README.md). Highlights:
 - [**`docs/external-secrets.md`**](docs/external-secrets.md)
 - [**`docs/extension-build-process.md`**](docs/extension-build-process.md)
 - [**`docs/zap-triage.md`**](docs/zap-triage.md) — DAST results workflow
-- [**`docs/backend/`**](docs/backend/) — auto-generated TypeDoc site for the backend service layer
+- **`docs/backend/`** — auto-generated TypeDoc site for the backend service layer (run `npx typedoc` in `backend/` to generate)
 - [**ADRs**](docs/adr/) — Stellar/Soroban vs EVM, direct-to-wallet vs custody, wallet-as-identity, CEI pattern
 
 ---
