@@ -267,9 +267,12 @@ export async function recordDonation(payload: {
   donorAddress: string;
   amountXLM?: string;
   amount?: string;
-  currency?: "XLM" | "USDC";
+  currency?: string;
   message?: string;
   transactionHash: string;
+  sourceAsset?: string;
+  conversionPath?: Array<{ code: string; issuer: string }>;
+  convertedAmountXLM?: string;
 }) {
   const { data } = await api.post<{ success: boolean; data: Donation }>(
     "/api/donations",
