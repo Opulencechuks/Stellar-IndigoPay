@@ -59,6 +59,8 @@ const {
 } = require("./services/webhookQueue");
 const { start: startPushQueue } = require("./services/pushQueue");
 const { startIndexer } = require("./services/indexerService");
+const { startReconciler, stopReconciler } = require("./services/indexerReconciler");
+const { startDLQWorker, stopDLQWorker } = require("./services/indexerDLQWorker");
 const lifecycle = require("./services/lifecycle");
 
 Sentry.init({
@@ -174,6 +176,31 @@ if (process.env.NODE_ENV !== "production") {
       "Swagger UI could not be mounted",
     );
   }
+}
+
+// Admin event service routes — mounted BEFORE the main admin router so that
+// /api/admin/* paths for specific sub-routers are matched before the generic
+// admin catch-all.
+try {
+  const adminEventsRouter = require("./routes/admin/events");
+  app.use("/api/admin/events", adminEventsRouter);
+  app.use("/api/v1/admin/events", adminEventsRouter);
+} catch (err) {
+  logger.error(
+    { event: "route_load_failed", route: "admin/events", err: err.message },
+    "Failed to load admin events route module",
+  );
+}
+
+try {
+  const adminAnalyticsRouter = require("./routes/admin/analytics");
+  app.use("/api/admin/analytics", adminAnalyticsRouter);
+  app.use("/api/v1/admin/analytics", adminAnalyticsRouter);
+} catch (err) {
+  logger.error(
+    { event: "route_load_failed", route: "admin/analytics", err: err.message },
+    "Failed to load admin analytics route module",
+  );
 }
 
 // ── Application routes ──────────────────────────────────────────────────────
@@ -316,6 +343,23 @@ async function startServer() {
       if (typeof oracleService.stop === "function") oracleService.stop();
     } catch {
       // ignore
+    }
+  });
+
+  lifecycle.onShutdown(async () => {
+    await stopReconciler();
+  });
+
+  lifecycle.onShutdown(async () => {
+    await stopDLQWorker();
+  });
+
+  // Soroban event service: stop the polling loop and persist the cursor.
+  lifecycle.onShutdown(async () => {
+    try {
+      await stopSorobanEvents();
+    } catch {
+      // Service may already be stopped; swallow.
     }
   });
 
