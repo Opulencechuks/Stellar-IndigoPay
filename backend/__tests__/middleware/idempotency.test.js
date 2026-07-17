@@ -66,7 +66,7 @@ describe("Idempotency Middleware", () => {
     expect(insertCall[0]).toContain("INSERT INTO idempotency_keys");
     expect(insertCall[1][0]).toBe(validKey);
     expect(insertCall[1][1]).toBe(hashBody(req.body));
-    expect(insertCall[1][2]).toBe(202); // placeholder status
+    expect(insertCall[1][2]).toBe(JSON.stringify({ status: "processing" })); // placeholder status
   });
 
   test("first POST with key allows processing, second POST with same key replays response", async () => {
