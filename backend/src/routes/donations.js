@@ -9,6 +9,7 @@ const { v4: uuid } = require("uuid");
 const { z } = require("zod");
 const logger = require("../logger");
 const pool = require("../db/pool");
+const { AppError } = require("../errors");
 const { createRateLimiter } = require("../middleware/rateLimiter");
 const { validate } = require("../middleware/validate");
 const {
@@ -506,9 +507,7 @@ router.get("/:id", async (req, res, next) => {
         id,
       )
     ) {
-      const e = new Error("Invalid donation ID");
-      e.status = 400;
-      throw e;
+      throw new AppError("VALIDATION_ERROR", { field: "id", message: "Invalid donation ID" });
     }
 
     const USDC_TO_XLM_RATE = parseFloat(process.env.USDC_TO_XLM_RATE || "8.0");
@@ -532,9 +531,7 @@ router.get("/:id", async (req, res, next) => {
     const result = await pool.query(query, [id]);
 
     if (!result.rows[0]) {
-      const e = new Error("Donation not found");
-      e.status = 404;
-      throw e;
+      throw new AppError("DONATION_NOT_FOUND");
     }
     const row = result.rows[0];
     const donationData = mapDonationRow(row);

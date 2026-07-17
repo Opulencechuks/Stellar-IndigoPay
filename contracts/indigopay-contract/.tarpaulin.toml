@@ -8,7 +8,7 @@
 
 [tarpaulin]
 # Target the contract crate specifically
-manifest-path = "contracts/indigopay-contract/Cargo.toml"
+manifest-path = "indigopay-contract/Cargo.toml"
 
 # Include only the contract source (exclude test helpers)
 files = ["src/lib.rs"]
