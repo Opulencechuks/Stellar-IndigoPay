@@ -20,6 +20,7 @@ import useOnlineStatus from "@/hooks/useOnlineStatus";
 import { queueDonation, syncQueuedDonations } from "@/lib/offlineDonationQueue";
 import { formatXLM, formatCO2 } from "@/utils/format";
 import type { ClimateProject } from "@/utils/types";
+import type { DonorAsset, ConversionEstimate } from "@/lib/dex";
 
 interface DonateFormProps {
   project: ClimateProject;
