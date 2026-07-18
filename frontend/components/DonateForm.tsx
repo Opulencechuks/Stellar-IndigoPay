@@ -24,6 +24,7 @@ import { recordDonation } from "@/lib/api";
 import useOnlineStatus from "@/hooks/useOnlineStatus";
 import { queueDonation, syncQueuedDonations } from "@/lib/offlineDonationQueue";
 import { formatXLM, formatCO2 } from "@/utils/format";
+import { trackEvent } from "@/lib/analytics";
 import { safeRandomUUID } from "@/utils/uuid";
 import type { ClimateProject } from "@/utils/types";
 
@@ -245,6 +246,16 @@ export default function DonateForm({
       return;
     }
 
+    trackEvent("donation_initiated", {
+      projectId: project.id,
+      currency: selectedAsset ? selectedAsset.code : currency,
+      amountXLM: selectedAsset
+        ? conversionEstimate?.estimatedXLM
+        : currency === "XLM"
+          ? amount
+          : undefined,
+    });
+
     try {
       // ── DEX Path-Payment Donation (non-XLM asset → XLM via DEX) ──────
       if (selectedAsset && conversionEstimate) {
@@ -273,6 +284,11 @@ export default function DonateForm({
         );
         if (signErr || !signedXDR) throw new Error(signErr || "Signing failed");
 
+        trackEvent("donation_signed", {
+          projectId: project.id,
+          amountXLM: sendAmount,
+        });
+
         setStep("submitting");
         const result = await submitTransaction(signedXDR);
         setTxHash(result.hash);
@@ -289,6 +305,11 @@ export default function DonateForm({
           sourceAsset: `${selectedAsset.code}:${selectedAsset.issuer}`,
           conversionPath: conversionEstimate.path,
           convertedAmountXLM: conversionEstimate.estimatedXLM,
+        });
+
+        trackEvent("donation_confirmed", {
+          projectId: project.id,
+          amountXLM: sendAmount,
         });
 
         setStep("success");
@@ -320,6 +341,11 @@ export default function DonateForm({
         );
         if (signErr || !signedXDR) throw new Error(signErr || "Signing failed");
 
+        trackEvent("donation_signed", {
+          projectId: project.id,
+          amountXLM: amountNum.toString(),
+        });
+
         setStep("submitting");
         const result = await submitTransaction(signedXDR);
         setTxHash(result.hash);
@@ -346,6 +372,11 @@ export default function DonateForm({
           message: message.trim() || undefined,
           transactionHash: result.hash,
           idempotencyKey,
+        });
+
+        trackEvent("donation_confirmed", {
+          projectId: project.id,
+          amountXLM: amountNum.toString(),
         });
 
         setStep("success");
@@ -384,6 +415,11 @@ export default function DonateForm({
         );
         if (signErr || !signedXDR) throw new Error(signErr || "Signing failed");
 
+        trackEvent("donation_signed", {
+          projectId: project.id,
+          amountXLM: currency === "XLM" ? amountNum.toString() : undefined,
+        });
+
         setStep("submitting");
         const result = await submitTransaction(signedXDR);
         setTxHash(result.hash);
@@ -397,6 +433,11 @@ export default function DonateForm({
           message: message.trim() || undefined,
           transactionHash: result.hash,
           idempotencyKey,
+        });
+
+        trackEvent("donation_confirmed", {
+          projectId: project.id,
+          amountXLM: currency === "XLM" ? amountNum.toString() : undefined,
         });
 
         setStep("success");

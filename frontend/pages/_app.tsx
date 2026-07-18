@@ -5,6 +5,7 @@ import { useRouter } from "next/router";
 import { AnimatePresence } from "framer-motion";
 import SkipToContent from "@/components/SkipToContent";
 import PageTransition from "@/components/PageTransition";
+import CookieConsent from "@/components/CookieConsent";
 import { ThemeTiedToaster } from "@/components/ThemeTiedToaster";
 import { ThemeProvider } from "@/lib/theme";
 import { I18nProvider } from "@/lib/i18n";
@@ -17,6 +18,7 @@ import OfflineFallback from "@/components/OfflineFallback";
 import InstallPrompt from "@/components/InstallPrompt";
 import { syncQueuedDonations } from "@/lib/offlineDonationQueue";
 import { recordDonation } from "@/lib/api";
+import { initAnalytics, trackEvent } from "@/lib/analytics";
 import "@/styles/globals.css";
 
 // ThemeTiedToaster keeps the sonner toast palette in sync with the
@@ -29,6 +31,20 @@ import "@/styles/globals.css";
 export default function App({ Component, pageProps }: AppProps) {
   const router = useRouter();
   const isOnline = useOnlineStatus();
+
+  useEffect(() => {
+    initAnalytics();
+  }, []);
+
+  useEffect(() => {
+    const handleRouteChange = (url: string) => {
+      trackEvent("page_viewed", { url });
+    };
+    router.events.on("routeChangeComplete", handleRouteChange);
+    return () => {
+      router.events.off("routeChangeComplete", handleRouteChange);
+    };
+  }, [router.events]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
@@ -61,7 +77,6 @@ export default function App({ Component, pageProps }: AppProps) {
       window.removeEventListener("online", handleOnlineSync);
     };
   }, []);
-
   return (
     <ErrorBoundary>
       <ThemeProvider>
@@ -97,6 +112,7 @@ export default function App({ Component, pageProps }: AppProps) {
                   </PageTransition>
                 </AnimatePresence>
               </main>
+              <CookieConsent />
               <InstallPrompt />
               <ThemeTiedToaster />
             </WalletProvider>
