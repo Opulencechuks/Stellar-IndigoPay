@@ -57,6 +57,7 @@ import type {
   ProjectUpdate,
 } from "@/utils/types";
 import { useWishlist } from "@/hooks/useWishlist";
+import { QueryErrorFallback } from "@/components/QueryErrorFallback";
 
 interface ProjectDetailProps {
   ogProject?: {
@@ -76,6 +77,9 @@ export default function ProjectDetail({ ogProject }: ProjectDetailProps) {
   const [publicKey, setPublicKey] = useState<string | null>(null);
   const [project, setProject] = useState<ClimateProject | null>(null);
   const [updates, setUpdates] = useState<ProjectUpdate[]>([]);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
   const [updateLikes, setUpdateLikes] = useState<
     Record<string, { liked: boolean; likeCount: number }>
   >({});
@@ -131,6 +135,7 @@ export default function ProjectDetail({ ogProject }: ProjectDetailProps) {
 
   useEffect(() => {
     if (!id) return;
+    setLoadError(null);
     Promise.all([
       fetchProject(id as string, publicKey ?? undefined),
       fetchProjectUpdates(id as string),
@@ -145,9 +150,34 @@ export default function ProjectDetail({ ogProject }: ProjectDetailProps) {
         setIsFollowing(p.isFollowing ?? false);
         setFollowCount(p.followCount ?? 0);
       })
-      .catch(() => router.push("/projects"))
+      .catch((err) => setLoadError(err))
       .finally(() => setLoading(false));
-  }, [id, publicKey, router]);
+  }, [id, publicKey]);
+
+  const handleRetryLoad = () => {
+    if (isRetrying || !id) return;
+    setRetryCount((c) => c + 1);
+    setIsRetrying(true);
+    setLoadError(null);
+    setLoading(true);
+    Promise.all([
+      fetchProject(id as string, publicKey ?? undefined),
+      fetchProjectUpdates(id as string),
+      fetchProjectMatches(id as string),
+    ])
+      .then(([p, u, m]) => {
+        setProject(p);
+        setUpdates(u);
+        setMatches(m);
+        setIsFollowing(p.isFollowing ?? false);
+        setFollowCount(p.followCount ?? 0);
+      })
+      .catch((err) => setLoadError(err))
+      .finally(() => {
+        setLoading(false);
+        setIsRetrying(false);
+      });
+  };
 
   useEffect(() => {
     if (!project) return;
@@ -696,7 +726,8 @@ export default function ProjectDetail({ ogProject }: ProjectDetailProps) {
     }
   };
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://stellar-indigopay.app";
+  const appUrl =
+    process.env.NEXT_PUBLIC_APP_URL || "https://stellar-indigopay.app";
   const canonicalUrl = `${appUrl}${router.asPath.split("?")[0]}`;
   const ogTitle = ogProject
     ? `${ogProject.name} — Stellar IndigoPay`
@@ -715,10 +746,25 @@ export default function ProjectDetail({ ogProject }: ProjectDetailProps) {
         description: project.description,
         image: project.imageUrl || ogImage,
         url: canonicalUrl,
-        location: project.location ? { "@type": "Place", name: project.location } : undefined,
+        location: project.location
+          ? { "@type": "Place", name: project.location }
+          : undefined,
         keywords: project.tags?.join(", "),
       }
     : null;
+
+  if ((loadError && !loading && !project) || isRetrying)
+    return (
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-10">
+        <QueryErrorFallback
+          error={loadError}
+          onRetry={handleRetryLoad}
+          isRetrying={isRetrying}
+          retryCount={retryCount}
+          title="Couldn't load this project"
+        />
+      </div>
+    );
 
   if (loading || !project)
     return (
@@ -736,8 +782,14 @@ export default function ProjectDetail({ ogProject }: ProjectDetailProps) {
             <SkeletonAvatar size="lg" palette="forest" />
             <div className="flex-1 space-y-3">
               <div className="flex gap-2">
-                <SkeletonBox className="h-6 rounded-full w-20" palette="forest" />
-                <SkeletonBox className="h-6 rounded-full w-16" palette="forest" />
+                <SkeletonBox
+                  className="h-6 rounded-full w-20"
+                  palette="forest"
+                />
+                <SkeletonBox
+                  className="h-6 rounded-full w-16"
+                  palette="forest"
+                />
               </div>
               <SkeletonBox className="h-8 rounded w-2/3" palette="forest" />
               <SkeletonBox className="h-4 rounded w-1/3" palette="forest" />
@@ -747,9 +799,18 @@ export default function ProjectDetail({ ogProject }: ProjectDetailProps) {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {[1, 2, 3].map((i) => (
               <div key={i} className="stat-card text-center space-y-2">
-                <SkeletonBox className="h-6 rounded w-8 mx-auto" palette="forest" />
-                <SkeletonBox className="h-5 rounded w-16 mx-auto" palette="forest" />
-                <SkeletonBox className="h-3 rounded w-12 mx-auto" palette="forest" />
+                <SkeletonBox
+                  className="h-6 rounded w-8 mx-auto"
+                  palette="forest"
+                />
+                <SkeletonBox
+                  className="h-5 rounded w-16 mx-auto"
+                  palette="forest"
+                />
+                <SkeletonBox
+                  className="h-3 rounded w-12 mx-auto"
+                  palette="forest"
+                />
               </div>
             ))}
           </div>
@@ -948,14 +1009,16 @@ export default function ProjectDetail({ ogProject }: ProjectDetailProps) {
                     {shareState === "copied" ? "✓ Link copied!" : "Share 🌍"}
                   </button>
                   {/* Analytics link — visible to wallet owner only */}
-                  {publicKey && project && publicKey === project.walletAddress && (
-                    <Link
-                      href={`/projects/${project.id}/analytics`}
-                      className="text-xs py-1 px-3 rounded-lg border font-medium bg-forest-600 text-white border-forest-600 hover:bg-forest-700 transition-colors"
-                    >
-                      Analytics 📊
-                    </Link>
-                  )}
+                  {publicKey &&
+                    project &&
+                    publicKey === project.walletAddress && (
+                      <Link
+                        href={`/projects/${project.id}/analytics`}
+                        className="text-xs py-1 px-3 rounded-lg border font-medium bg-forest-600 text-white border-forest-600 hover:bg-forest-700 transition-colors"
+                      >
+                        Analytics 📊
+                      </Link>
+                    )}
                   {/* Follow button — visible to connected wallets only */}
                   {publicKey && (
                     <button
@@ -1857,7 +1920,10 @@ export default function ProjectDetail({ ogProject }: ProjectDetailProps) {
 
           {/* Embed Widget — visible to wallet owner only (issue #74) */}
           {publicKey && project && publicKey === project.walletAddress && (
-            <EmbedWidgetSection projectId={project.id} projectName={project.name} />
+            <EmbedWidgetSection
+              projectId={project.id}
+              projectName={project.name}
+            />
           )}
 
           {/* Subscribe card */}
