@@ -193,6 +193,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Comprehensive Soroban contract fuzzing harness with 7 property-based tests (#239)
+- ContractAction-based action-sequence fuzzing for holistic invariant checking
+- Fuzz corpus infrastructure with replayable regression tests
+- Property tests: donation totals consistency, badge monotonicity, donor count accuracy,
+  global stats consistency, vote integrity, CO₂ offset monotonicity, pause/resume idempotency
+- CI fuzz job with 60-second timeout and corpus regression step
+- FUZZ_FINDINGS.md documenting all discoveries from fuzz testing
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 

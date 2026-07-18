@@ -43,9 +43,9 @@ jobs:
         run: cargo build --workspace --target wasm32v1-none --release
 
   fuzz:
-    name: Fuzz Tests (10k iterations)
+    name: Fuzz Tests (property-based, 60s)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: contracts
@@ -64,10 +64,15 @@ jobs:
         with:
           workspaces: contracts
 
-      - name: Run fuzz tests (1.5k iterations)
-        run: cargo test --features testutils -- fuzz
+      - name: Run fuzz tests (1.5k iterations, ~60s)
+        run: cargo test --features testutils -- fuzz -- --test-threads=1 --nocapture
         env:
           FUZZ_ITERATIONS: 1500
+        timeout-minutes: 2
+
+      - name: Run corpus regression tests
+        run: cargo test --features testutils -- corpus regression
+        timeout-minutes: 2
 
   coverage:
     name: Coverage (tarpaulin)
