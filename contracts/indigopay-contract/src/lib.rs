@@ -521,10 +521,33 @@ fn apply_campaign_goal_progress(project: &mut Project) -> bool {
 fn voting_weight_from_badge(badge: &BadgeTier) -> u32 {
     match badge {
         BadgeTier::None => 0,
-        BadgeTier::Seedling => 1,
-        BadgeTier::Tree => 3,
-        BadgeTier::Forest => 10,
-        BadgeTier::EarthGuardian => 25,
+        BadgeTier::Seedling => 100,
+        BadgeTier::Tree => 141,
+        BadgeTier::Forest => 173,
+        BadgeTier::EarthGuardian => 200,
+    }
+}
+
+fn update_delegated_weight_if_needed(
+    env: &Env,
+    donor: &Address,
+    prev_badge: &BadgeTier,
+    new_badge: &BadgeTier,
+) {
+    if prev_badge != new_badge {
+        let old_weight = voting_weight_from_badge(prev_badge);
+        let new_weight = voting_weight_from_badge(new_badge);
+        if new_weight > old_weight {
+            let key = DataKey::VoteDelegation(donor.clone());
+            if let Some(delegate) = env.storage().instance().get::<_, Address>(&key) {
+                let del_key = DataKey::DelegatedWeight(delegate.clone());
+                let mut del_weight: u32 = env.storage().instance().get(&del_key).unwrap_or(0);
+                del_weight = del_weight
+                    .checked_add(new_weight - old_weight)
+                    .expect("Delegated weight overflow");
+                env.storage().instance().set(&del_key, &del_weight);
+            }
+        }
     }
 }
 
@@ -1055,6 +1078,7 @@ impl IndigoPayContract {
             .checked_add(co2_increment)
             .expect("Donor co2_offset overflow");
         donor_stats.badge = calculate_badge(donor_stats.total_donated);
+        update_delegated_weight_if_needed(&env, &donor, &prev_badge, &donor_stats.badge);
         env.storage()
             .instance()
             .set(&DataKey::DonorStats(donor.clone()), &donor_stats);
@@ -1243,6 +1267,7 @@ impl IndigoPayContract {
             .checked_add(co2_increment)
             .expect("Donor co2_offset overflow");
         donor_stats.badge = calculate_badge(donor_stats.total_donated);
+        update_delegated_weight_if_needed(&env, &donor, &prev_badge, &donor_stats.badge);
         env.storage()
             .instance()
             .set(&DataKey::DonorStats(donor.clone()), &donor_stats);
@@ -1641,20 +1666,129 @@ impl IndigoPayContract {
         let stats: DonorStats = env
             .storage()
             .instance()
-            .get(&DataKey::DonorStats(voter))
+            .get(&DataKey::DonorStats(voter.clone()))
             .unwrap_or(DonorStats {
                 total_donated: 0,
                 donation_count: 0,
                 badge: BadgeTier::None,
                 co2_offset_grams: 0,
             });
-        voting_weight_from_badge(&stats.badge)
+        let own_weight = voting_weight_from_badge(&stats.badge);
+        let delegated_weight: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DelegatedWeight(voter))
+            .unwrap_or(0);
+        own_weight
+            .checked_add(delegated_weight)
+            .expect("Weight overflow")
+    }
+
+    pub fn delegate_vote(env: Env, donor: Address, delegate: Address) {
+        donor.require_auth();
+        require_not_paused(&env);
+        
+        if donor == delegate {
+            panic!("Cannot delegate to self");
+        }
+
+        let del_key = DataKey::VoteDelegation(donor.clone());
+        let old_delegate: Option<Address> = env.storage().instance().get(&del_key);
+
+        if let Some(ref old) = old_delegate {
+            if *old == delegate {
+                panic!("Already delegated to this address");
+            }
+        }
+
+        let donor_stats: DonorStats = env
+            .storage()
+            .instance()
+            .get(&DataKey::DonorStats(donor.clone()))
+            .unwrap_or(DonorStats {
+                total_donated: 0,
+                donation_count: 0,
+                badge: BadgeTier::None,
+                co2_offset_grams: 0,
+            });
+            
+        let weight = voting_weight_from_badge(&donor_stats.badge);
+
+        if let Some(old) = old_delegate {
+            let old_del_key = DataKey::DelegatedWeight(old.clone());
+            let mut old_weight: u32 = env.storage().instance().get(&old_del_key).unwrap_or(0);
+            old_weight = old_weight.checked_sub(weight).expect("Weight underflow");
+            env.storage().instance().set(&old_del_key, &old_weight);
+        }
+
+        let new_del_key = DataKey::DelegatedWeight(delegate.clone());
+        let mut new_weight: u32 = env.storage().instance().get(&new_del_key).unwrap_or(0);
+        new_weight = new_weight.checked_add(weight).expect("Weight overflow");
+        
+        env.storage().instance().set(&new_del_key, &new_weight);
+        env.storage().instance().set(&del_key, &delegate);
+
+        env.events()
+            .publish((symbol_short!("delegate"), donor), delegate);
+        ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+
+    pub fn revoke_delegation(env: Env, donor: Address) {
+        donor.require_auth();
+        require_not_paused(&env);
+
+        let del_key = DataKey::VoteDelegation(donor.clone());
+        let delegate: Option<Address> = env.storage().instance().get(&del_key);
+
+        if let Some(del) = delegate {
+            let donor_stats: DonorStats = env
+                .storage()
+                .instance()
+                .get(&DataKey::DonorStats(donor.clone()))
+                .unwrap_or(DonorStats {
+                    total_donated: 0,
+                    donation_count: 0,
+                    badge: BadgeTier::None,
+                    co2_offset_grams: 0,
+                });
+                
+            let weight = voting_weight_from_badge(&donor_stats.badge);
+
+            let old_del_key = DataKey::DelegatedWeight(del.clone());
+            let mut old_weight: u32 = env.storage().instance().get(&old_del_key).unwrap_or(0);
+            old_weight = old_weight.checked_sub(weight).expect("Weight underflow");
+            env.storage().instance().set(&old_del_key, &old_weight);
+            
+            env.storage().instance().remove(&del_key);
+            
+            env.events()
+                .publish((symbol_short!("revoke"), donor), ());
+            ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+        } else {
+            panic!("No active delegation to revoke");
+        }
+    }
+
+    pub fn get_delegate(env: Env, donor: Address) -> Option<Address> {
+        env.storage().instance().get(&DataKey::VoteDelegation(donor))
+    }
+
+    pub fn get_delegated_weight(env: Env, delegate: Address) -> u32 {
+        env.storage().instance().get(&DataKey::DelegatedWeight(delegate)).unwrap_or(0)
     }
 
     /// Badge holders (≥ Seedling) cast a vote. One vote per address per proposal.
     pub fn vote_verify_project(env: Env, voter: Address, project_id: String, approve: bool) {
         voter.require_auth();
         require_not_paused(&env);
+
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::VoteDelegation(voter.clone()))
+        {
+            panic!("Must revoke delegation before voting directly");
+        }
 
         let stats: DonorStats = env
             .storage()
@@ -1666,11 +1800,20 @@ impl IndigoPayContract {
                 badge: BadgeTier::None,
                 co2_offset_grams: 0,
             });
-        if stats.badge == BadgeTier::None {
-            panic!("Only badge holders (Seedling or above) can vote");
-        }
 
-        let weight = voting_weight_from_badge(&stats.badge);
+        let own_weight = voting_weight_from_badge(&stats.badge);
+        let delegated_weight: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DelegatedWeight(voter.clone()))
+            .unwrap_or(0);
+        let weight = own_weight
+            .checked_add(delegated_weight)
+            .expect("Weight overflow");
+
+        if weight == 0 {
+            panic!("Only badge holders (Seedling or above) or active delegates can vote");
+        }
 
         let mut proposal: VoteProposal = env
             .storage()
@@ -1897,6 +2040,7 @@ impl IndigoPayContract {
             .checked_add(co2_increment)
             .expect("Donor co2_offset overflow");
         donor_stats.badge = calculate_badge(donor_stats.total_donated);
+        update_delegated_weight_if_needed(&env, &donor, &prev_badge, &donor_stats.badge);
         env.storage()
             .instance()
             .set(&DataKey::DonorStats(donor.clone()), &donor_stats);
@@ -3509,12 +3653,12 @@ mod tests {
         grant_badge(&env, &cid, &voter);
         client.vote_verify_project(&voter, &pid, &true);
         let p = client.get_proposal(&pid);
-        assert_eq!(p.votes_for, 1);
+        assert_eq!(p.votes_for, 100);
         assert_eq!(p.votes_against, 0);
     }
 
     #[test]
-    #[should_panic(expected = "Only badge holders (Seedling or above) can vote")]
+    #[should_panic(expected = "Only badge holders (Seedling or above) or active delegates can vote")]
     fn test_non_badge_holder_cannot_vote() {
         let (env, _cid, client, admin, pid) = setup();
         client.create_proposal(&signers1(&env, &admin), &pid, &0u32);
@@ -3548,8 +3692,8 @@ mod tests {
         client.resolve_proposal(&pid);
         let p = client.get_proposal(&pid);
         assert!(p.resolved);
-        assert_eq!(p.votes_for, 2);
-        assert_eq!(p.votes_against, 1);
+        assert_eq!(p.votes_for, 200);
+        assert_eq!(p.votes_against, 100);
     }
 
     #[test]
@@ -3567,8 +3711,8 @@ mod tests {
         client.resolve_proposal(&pid);
         let p = client.get_proposal(&pid);
         assert!(p.resolved);
-        assert_eq!(p.votes_for, 1);
-        assert_eq!(p.votes_against, 2);
+        assert_eq!(p.votes_for, 100);
+        assert_eq!(p.votes_against, 200);
     }
 
     #[test]
@@ -3588,8 +3732,8 @@ mod tests {
 
         let p = client.get_proposal(&pid);
         assert!(p.resolved);
-        assert_eq!(p.votes_for, 1);
-        assert_eq!(p.votes_against, 1);
+        assert_eq!(p.votes_for, 100);
+        assert_eq!(p.votes_against, 100);
 
         // A tie (1 for, 1 against) produces a rejection outcome.
         // Event-level assertion is intentionally skipped here because the
@@ -3783,7 +3927,7 @@ mod tests {
         client.vote_verify_project(&voter, &pid, &true);
 
         let proposal = client.get_proposal(&pid);
-        assert_eq!(proposal.votes_for, 1);
+        assert_eq!(proposal.votes_for, 100);
     }
 
     /// Test minimum voting duration enforcement (issue #209).
@@ -3806,7 +3950,7 @@ mod tests {
         client.vote_verify_project(&voter, &pid, &true);
 
         let proposal = client.get_proposal(&pid);
-        assert_eq!(proposal.votes_for, 1);
+        assert_eq!(proposal.votes_for, 100);
     }
 
     // ─── ProjectMilestoneNFT tests (#205) ────────────────────────────────────
