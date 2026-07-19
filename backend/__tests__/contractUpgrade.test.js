@@ -140,9 +140,15 @@ describe("Contract upgrade — indexer compatibility", () => {
 
     rpcServer.getEvents.mockResolvedValueOnce({ events });
 
-    pool.query.mockImplementation((sql) => {
+    pool.query.mockImplementation((sql, params) => {
       if (sql.includes("SELECT value FROM indexer_state")) {
         return { rows: [{ value: "token4" }] };
+      }
+      if (sql.includes("INSERT INTO soroban_event_dlq")) {
+        return { rows: [{ id: 1 }] }; // Mock successful DLQ insert
+      }
+      if (sql.includes("INSERT INTO indexer_state")) {
+        return { rows: [] };
       }
       return { rows: [] };
     });
