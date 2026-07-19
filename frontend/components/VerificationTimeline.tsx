@@ -4,7 +4,7 @@
  * Accepts an array of events with `label` and ISO `date` strings.
  * Renders a sleek vertical timeline with subtle hover animations.
  */
-import React from 'react';
+import React from "react";
 
 interface Event {
   label: string;
@@ -17,7 +17,9 @@ interface Props {
 
 export default function VerificationTimeline({ events }: Props) {
   // Sort events chronologically just in case
-  const sorted = [...events].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  const sorted = [...events].sort(
+    (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+  );
 
   return (
     <div className="relative ml-4">
@@ -28,9 +30,17 @@ export default function VerificationTimeline({ events }: Props) {
           <li key={idx} className="flex items-start group">
             <div className="flex-shrink-0 w-4 h-4 mt-1 rounded-full bg-white border-2 border-indigo-500 dark:bg-gray-800 dark:border-indigo-400 transform transition-transform duration-200 group-hover:scale-110"></div>
             <div className="ml-6">
-              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">{event.label}</h3>
-              <time className="text-sm text-gray-500 dark:text-gray-400" dateTime={event.date}>
-                {new Date(event.date).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
+                {event.label}
+              </h3>
+              <time
+                className="text-sm text-gray-500 dark:text-gray-400"
+                dateTime={event.date}
+              >
+                {new Date(event.date).toLocaleString(undefined, {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                })}
               </time>
             </div>
           </li>
@@ -39,5 +49,3 @@ export default function VerificationTimeline({ events }: Props) {
     </div>
   );
 }
-
-// Optional CSS (Tailwind‑like classes are assumed via Next.js config). If you need custom CSS, add to a global stylesheet.

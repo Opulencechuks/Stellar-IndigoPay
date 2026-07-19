@@ -21,7 +21,7 @@
       "npx eslint --fix"
     ],
     "frontend/**/*.{ts,tsx}": [
-      "npx eslint --fix"
+      "prettier --write"
     ],
     "extension/**/*.{ts,tsx,js,jsx}": [
       "bash -c 'cd extension && npx tsc --noEmit'"
