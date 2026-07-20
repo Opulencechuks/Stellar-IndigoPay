@@ -245,8 +245,8 @@ pub struct RecurringDonation {
     pub donor: Address,
     pub project_id: String,
     pub amount: i128,
-    pub currency: Symbol,       // "XLM" or "USDC"
-    pub interval_ledgers: u32,  // e.g. 518400 ≈ 30 days @ 5s/ledger
+    pub currency: Symbol,      // "XLM" or "USDC"
+    pub interval_ledgers: u32, // e.g. 518400 ≈ 30 days @ 5s/ledger
     pub next_execution_ledger: u32,
     pub keeper_incentive: i128, // stroops paid to executor
     pub active: bool,
@@ -351,6 +351,8 @@ pub enum DataKey {
     ProjectContractBalance(String, Address),
     RecurringDonation(Address, u32),
     DonorRecurringCount(Address),
+    VoteDelegation(Address),
+    DelegatedWeight(Address),
     NativeTokenAddress,
 }
 
@@ -475,7 +477,7 @@ fn ensure_min_ttl(env: &Env, min_ledgers: u32) {
         .extend_ttl(min_ledgers, min_ledgers);
 }
 
-fn calculate_badge(total_stroops: i128) -> BadgeTier {
+pub fn calculate_badge(total_stroops: i128) -> BadgeTier {
     let xlm = total_stroops / STROOP;
     if xlm >= 2000 {
         BadgeTier::EarthGuardian
@@ -519,7 +521,7 @@ fn apply_campaign_goal_progress(project: &mut Project) -> bool {
     }
 }
 
-fn voting_weight_from_badge(badge: &BadgeTier) -> u32 {
+pub fn voting_weight_from_badge(badge: &BadgeTier) -> u32 {
     match badge {
         BadgeTier::None => 0,
         BadgeTier::Seedling => 100,
@@ -529,6 +531,7 @@ fn voting_weight_from_badge(badge: &BadgeTier) -> u32 {
     }
 }
 
+#[cfg(feature = "delegation")]
 fn update_delegated_weight_if_needed(
     env: &Env,
     donor: &Address,
@@ -875,6 +878,7 @@ impl IndigoPayContract {
     /// Admin-only: start a time-bound fundraising campaign on a project.
     /// Goal is denominated in stroops (XLM-equivalent). Only one campaign
     /// may be Active at a time; a prior campaign must be Closed or Expired.
+    #[cfg(feature = "campaign")]
     pub fn create_campaign(
         env: Env,
         admin: Address,
@@ -923,6 +927,7 @@ impl IndigoPayContract {
     }
 
     /// Admin-only: push an Active campaign's deadline further into the future.
+    #[cfg(feature = "campaign")]
     pub fn extend_campaign(env: Env, admin: Address, project_id: String, new_deadline: u32) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
@@ -956,6 +961,7 @@ impl IndigoPayContract {
 
     /// Admin-only: end a campaign. Early close → `Closed`; past deadline
     /// without meeting the goal → `Expired`; closing after `GoalReached` → `Closed`.
+    #[cfg(feature = "campaign")]
     pub fn close_campaign(env: Env, admin: Address, project_id: String) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
@@ -991,6 +997,7 @@ impl IndigoPayContract {
 
     // ─── Donations ────────────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     pub fn donate(
         env: Env,
         token: Address,
@@ -1111,6 +1118,7 @@ impl IndigoPayContract {
             .checked_add(co2_increment)
             .expect("Donor co2_offset overflow");
         donor_stats.badge = calculate_badge(donor_stats.total_donated);
+        #[cfg(feature = "delegation")]
         update_delegated_weight_if_needed(&env, &donor, &prev_badge, &donor_stats.badge);
         env.storage()
             .instance()
@@ -1301,6 +1309,7 @@ impl IndigoPayContract {
             .checked_add(co2_increment)
             .expect("Donor co2_offset overflow");
         donor_stats.badge = calculate_badge(donor_stats.total_donated);
+        #[cfg(feature = "delegation")]
         update_delegated_weight_if_needed(&env, &donor, &prev_badge, &donor_stats.badge);
         env.storage()
             .instance()
@@ -1639,6 +1648,7 @@ impl IndigoPayContract {
     /// ledgers (≈5 s each). Pass `0` to use the default 7-day window;
     /// any other value must be within
     /// [`MIN_VOTING_WINDOW_LEDGERS`, `MAX_VOTING_WINDOW_LEDGERS`].
+    #[cfg(feature = "governance")]
     pub fn create_proposal(
         env: Env,
         signers: Vec<Address>,
@@ -1696,6 +1706,7 @@ impl IndigoPayContract {
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
 
+    #[cfg(feature = "governance")]
     pub fn get_voter_weight(env: Env, voter: Address) -> u32 {
         let stats: DonorStats = env
             .storage()
@@ -1708,20 +1719,24 @@ impl IndigoPayContract {
                 co2_offset_grams: 0,
             });
         let own_weight = voting_weight_from_badge(&stats.badge);
+        #[cfg(feature = "delegation")]
         let delegated_weight: u32 = env
             .storage()
             .instance()
             .get(&DataKey::DelegatedWeight(voter))
             .unwrap_or(0);
+        #[cfg(not(feature = "delegation"))]
+        let delegated_weight: u32 = 0;
         own_weight
             .checked_add(delegated_weight)
             .expect("Weight overflow")
     }
 
+    #[cfg(feature = "delegation")]
     pub fn delegate_vote(env: Env, donor: Address, delegate: Address) {
         donor.require_auth();
         require_not_paused(&env);
-        
+
         if donor == delegate {
             panic!("Cannot delegate to self");
         }
@@ -1745,7 +1760,7 @@ impl IndigoPayContract {
                 badge: BadgeTier::None,
                 co2_offset_grams: 0,
             });
-            
+
         let weight = voting_weight_from_badge(&donor_stats.badge);
 
         if let Some(old) = old_delegate {
@@ -1758,7 +1773,7 @@ impl IndigoPayContract {
         let new_del_key = DataKey::DelegatedWeight(delegate.clone());
         let mut new_weight: u32 = env.storage().instance().get(&new_del_key).unwrap_or(0);
         new_weight = new_weight.checked_add(weight).expect("Weight overflow");
-        
+
         env.storage().instance().set(&new_del_key, &new_weight);
         env.storage().instance().set(&del_key, &delegate);
 
@@ -1767,6 +1782,7 @@ impl IndigoPayContract {
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
 
+    #[cfg(feature = "delegation")]
     pub fn revoke_delegation(env: Env, donor: Address) {
         donor.require_auth();
         require_not_paused(&env);
@@ -1785,33 +1801,40 @@ impl IndigoPayContract {
                     badge: BadgeTier::None,
                     co2_offset_grams: 0,
                 });
-                
+
             let weight = voting_weight_from_badge(&donor_stats.badge);
 
             let old_del_key = DataKey::DelegatedWeight(del.clone());
             let mut old_weight: u32 = env.storage().instance().get(&old_del_key).unwrap_or(0);
             old_weight = old_weight.checked_sub(weight).expect("Weight underflow");
             env.storage().instance().set(&old_del_key, &old_weight);
-            
+
             env.storage().instance().remove(&del_key);
-            
-            env.events()
-                .publish((symbol_short!("revoke"), donor), ());
+
+            env.events().publish((symbol_short!("revoke"), donor), ());
             ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
         } else {
             panic!("No active delegation to revoke");
         }
     }
 
+    #[cfg(feature = "delegation")]
     pub fn get_delegate(env: Env, donor: Address) -> Option<Address> {
-        env.storage().instance().get(&DataKey::VoteDelegation(donor))
+        env.storage()
+            .instance()
+            .get(&DataKey::VoteDelegation(donor))
     }
 
+    #[cfg(feature = "delegation")]
     pub fn get_delegated_weight(env: Env, delegate: Address) -> u32 {
-        env.storage().instance().get(&DataKey::DelegatedWeight(delegate)).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DataKey::DelegatedWeight(delegate))
+            .unwrap_or(0)
     }
 
     /// Badge holders (≥ Seedling) cast a vote. One vote per address per proposal.
+    #[cfg(feature = "governance")]
     pub fn vote_verify_project(env: Env, voter: Address, project_id: String, approve: bool) {
         voter.require_auth();
         require_not_paused(&env);
@@ -1903,6 +1926,7 @@ impl IndigoPayContract {
 
     /// Callable by anyone after the deadline. Resolves based on majority.
     /// Emits proj_ver on approval, prop_rej on rejection.
+    #[cfg(feature = "governance")]
     pub fn resolve_proposal(env: Env, project_id: String) {
         let mut proposal: VoteProposal = env
             .storage()
@@ -1932,6 +1956,7 @@ impl IndigoPayContract {
     /// Admin-only immediate veto. Marks the proposal resolved & rejected.
     /// Required for incident response when a proposal is based on fraudulent data.
     /// Emits prop_veto with the admin address for auditability.
+    #[cfg(feature = "governance")]
     pub fn veto_proposal(env: Env, signers: Vec<Address>, project_id: String) {
         require_admin_for_critical(&env, &signers);
         let mut proposal: VoteProposal = env
@@ -1954,6 +1979,7 @@ impl IndigoPayContract {
     }
 
     /// Returns current vote counts and status for a proposal.
+    #[cfg(feature = "governance")]
     pub fn get_proposal(env: Env, project_id: String) -> VoteProposal {
         env.storage()
             .instance()
@@ -1963,6 +1989,7 @@ impl IndigoPayContract {
 
     /// Returns the list of voter addresses for a proposal.
     /// Can be used by governance UIs to display who voted and how.
+    #[cfg(feature = "governance")]
     pub fn get_voter_list(env: Env, project_id: String) -> Vec<Address> {
         env.storage()
             .instance()
@@ -1971,6 +1998,7 @@ impl IndigoPayContract {
     }
 
     /// Donate USDC. Converts to XLM-equivalent for global stats using a price oracle stub.
+    #[cfg(feature = "usdc")]
     pub fn donate_usdc(
         env: Env,
         usdc_token: Address,
@@ -2075,6 +2103,7 @@ impl IndigoPayContract {
             .checked_add(co2_increment)
             .expect("Donor co2_offset overflow");
         donor_stats.badge = calculate_badge(donor_stats.total_donated);
+        #[cfg(feature = "delegation")]
         update_delegated_weight_if_needed(&env, &donor, &prev_badge, &donor_stats.badge);
         env.storage()
             .instance()
@@ -2167,6 +2196,7 @@ impl IndigoPayContract {
     }
 
     /// Admin-only: Set the USDC token address for multi-currency donations.
+    #[cfg(feature = "usdc")]
     pub fn set_usdc_token(env: Env, admin: Address, usdc_token: Address) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
@@ -2179,6 +2209,7 @@ impl IndigoPayContract {
     }
 
     /// Get the configured USDC token address.
+    #[cfg(feature = "usdc")]
     pub fn get_usdc_token(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::USDCTokenAddress)
     }
@@ -2227,6 +2258,7 @@ impl IndigoPayContract {
 
     /// Admin-only: Set the price oracle contract address used by `donate_usdc`.
     /// The oracle must implement `OracleInterface::get_price()`.
+    #[cfg(feature = "usdc")]
     pub fn set_oracle(env: Env, admin: Address, oracle: Address) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
@@ -2238,11 +2270,13 @@ impl IndigoPayContract {
     }
 
     /// Get the configured price oracle address.
+    #[cfg(feature = "usdc")]
     pub fn get_oracle(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::OracleAddress)
     }
 
     /// Get the current contract WASM hash.
+    #[cfg(feature = "upgrade")]
     pub fn get_contract_wasm_hash(env: Env) -> Option<BytesN<32>> {
         env.storage().instance().get(&DataKey::ContractWasmHash)
     }
@@ -2435,6 +2469,7 @@ impl IndigoPayContract {
     /// proposed WASM hash and the ledger sequence at which it becomes
     /// executable. Replaces any existing pending upgrade is not allowed;
     /// the caller must `cancel_upgrade` first.
+    #[cfg(feature = "upgrade")]
     pub fn propose_upgrade(env: Env, signers: Vec<Address>, new_wasm_hash: BytesN<32>) {
         require_admin_for_critical(&env, &signers);
         if env.storage().instance().has(&DataKey::PendingUpgrade) {
@@ -2469,6 +2504,7 @@ impl IndigoPayContract {
     /// but the community has 48h to react (exit positions, deploy a
     /// rescue contract, signal off-chain) before the WASM is swapped.
     /// There is NO second gate; the timelock is the only safeguard.
+    #[cfg(feature = "upgrade")]
     pub fn execute_upgrade(env: Env) {
         let pending: BytesN<32> = env
             .storage()
@@ -2498,6 +2534,7 @@ impl IndigoPayContract {
     /// Admin-only: cancel a pending upgrade without executing it. Use
     /// during incident response if the proposed WASM turns out to be
     /// malicious or buggy before the timelock elapses.
+    #[cfg(feature = "upgrade")]
     pub fn cancel_upgrade(env: Env, signers: Vec<Address>) {
         require_admin_for_critical(&env, &signers);
         if !env.storage().instance().has(&DataKey::PendingUpgrade) {
@@ -2514,6 +2551,7 @@ impl IndigoPayContract {
 
     /// Read-only: returns `(hash, effective_at_ledger)` for the pending
     /// upgrade, or `None` if no upgrade is currently proposed.
+    #[cfg(feature = "upgrade")]
     pub fn get_pending_upgrade(env: Env) -> Option<(BytesN<32>, u32)> {
         let hash: Option<BytesN<32>> = env.storage().instance().get(&DataKey::PendingUpgrade);
         let effective: Option<u32> = env.storage().instance().get(&DataKey::UpgradeEffectiveAt);
@@ -2526,6 +2564,7 @@ impl IndigoPayContract {
     /// Read-only: hash of the most-recently executed upgrade, or `None`
     /// if the contract has never been upgraded. Updated by
     /// `execute_upgrade`.
+    #[cfg(feature = "upgrade")]
     pub fn get_last_executed_upgrade(env: Env) -> Option<BytesN<32>> {
         env.storage().instance().get(&DataKey::LastExecutedUpgrade)
     }
@@ -2541,6 +2580,7 @@ impl IndigoPayContract {
     /// The actual balance check happens at execution time, not here,
     /// because the 7-day gap means the balance could shift before then
     /// (TOCTOU avoidance).
+    #[cfg(feature = "emergency")]
     pub fn initiate_emergency_withdrawal(
         env: Env,
         admin: Address,
@@ -2599,6 +2639,7 @@ impl IndigoPayContract {
     /// Admin-only: cancel a pending emergency withdrawal before it has
     /// been executed. Clears the pending entry and emits an event for
     /// off-chain notification.
+    #[cfg(feature = "emergency")]
     pub fn cancel_emergency_withdrawal(env: Env, admin: Address, project_id: String) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
@@ -2625,6 +2666,7 @@ impl IndigoPayContract {
     /// the project's per-project-per-token balance is sufficient, then
     /// clears the pending entry, decrements the balance, and transfers
     /// tokens to the new wallet (CEI ordering).
+    #[cfg(feature = "emergency")]
     pub fn execute_emergency_withdrawal(env: Env, project_id: String) {
         let withdrawal: EmergencyWithdrawal = env
             .storage()
@@ -2669,6 +2711,7 @@ impl IndigoPayContract {
 
     /// Read-only: returns the pending emergency withdrawal for a project,
     /// or `None` if no withdrawal is currently pending.
+    #[cfg(feature = "emergency")]
     pub fn get_emergency_withdrawal(env: Env, project_id: String) -> Option<EmergencyWithdrawal> {
         env.storage()
             .instance()
@@ -2681,6 +2724,7 @@ impl IndigoPayContract {
     /// window (`REFUND_COOLDOWN_LEDGERS`) after the original donation.
     /// Creates a `RefundRequest` with status `Pending` for admin + project
     /// wallet approval.
+    #[cfg(feature = "refund")]
     pub fn request_refund(env: Env, donor: Address, donation_record_index: u32, token: Address) {
         donor.require_auth();
         require_not_paused(&env);
@@ -2759,6 +2803,7 @@ impl IndigoPayContract {
     ///
     /// Badges are permanent and NOT recalculated. `DonationCount` is historical
     /// and NOT decremented.
+    #[cfg(feature = "refund")]
     pub fn approve_refund(env: Env, admin: Address, refund_id: u32) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
@@ -2872,6 +2917,7 @@ impl IndigoPayContract {
 
     /// Admin-only: reject a pending refund request. The donation stands;
     /// no counters are adjusted and no tokens move.
+    #[cfg(feature = "refund")]
     pub fn reject_refund(env: Env, admin: Address, refund_id: u32) {
         require_admin_for_routine(&env, &admin);
         require_not_paused(&env);
@@ -2908,6 +2954,8 @@ impl IndigoPayContract {
 
     // ─── Recurring Donations ──────────────────────────────────────────────────
 
+    #[cfg(feature = "recurring")]
+    #[allow(clippy::too_many_arguments)]
     pub fn create_recurring(
         env: Env,
         donor: Address,
@@ -2966,12 +3014,20 @@ impl IndigoPayContract {
 
         env.events().publish(
             (symbol_short!("rec_cr"), donor, project_id),
-            (recurring_id, amount, currency, interval_ledgers, keeper_incentive, msg_hash),
+            (
+                recurring_id,
+                amount,
+                currency,
+                interval_ledgers,
+                keeper_incentive,
+                msg_hash,
+            ),
         );
 
         recurring_id
     }
 
+    #[cfg(feature = "recurring")]
     pub fn cancel_recurring(env: Env, donor: Address, recurring_id: u32) {
         donor.require_auth();
         require_not_paused(&env);
@@ -2990,12 +3046,11 @@ impl IndigoPayContract {
         recurring.active = false;
         env.storage().instance().set(&recurring_key, &recurring);
 
-        env.events().publish(
-            (symbol_short!("rec_can"), donor, recurring_id),
-            (),
-        );
+        env.events()
+            .publish((symbol_short!("rec_can"), donor, recurring_id), ());
     }
 
+    #[cfg(feature = "recurring")]
     pub fn execute_recurring(env: Env, keeper: Address, donor: Address, recurring_id: u32) {
         keeper.require_auth();
         require_not_paused(&env);
@@ -3040,7 +3095,8 @@ impl IndigoPayContract {
 
             xlm_equivalent = recurring.amount;
         } else if recurring.currency == symbol_short!("USDC") {
-            let stored_usdc: Option<Address> = env.storage().instance().get(&DataKey::USDCTokenAddress);
+            let stored_usdc: Option<Address> =
+                env.storage().instance().get(&DataKey::USDCTokenAddress);
             token_addr = stored_usdc.expect("USDC token not configured");
 
             let oracle_addr: Address = env
@@ -3053,7 +3109,8 @@ impl IndigoPayContract {
             if rate <= 0 {
                 panic!("Oracle returned invalid price");
             }
-            xlm_equivalent = recurring.amount
+            xlm_equivalent = recurring
+                .amount
                 .checked_mul(rate)
                 .expect("USDC to XLM conversion overflow");
         } else {
@@ -3121,7 +3178,8 @@ impl IndigoPayContract {
             .set(&DataKey::DonorStats(donor.clone()), &donor_stats);
 
         // Track per-project cumulative donations
-        let proj_total_key = DataKey::DonorProjectTotal(recurring.project_id.clone(), donor.clone());
+        let proj_total_key =
+            DataKey::DonorProjectTotal(recurring.project_id.clone(), donor.clone());
         let prev_proj_total: i128 = env.storage().instance().get(&proj_total_key).unwrap_or(0);
         env.storage().instance().set(
             &proj_total_key,
@@ -3180,18 +3238,21 @@ impl IndigoPayContract {
             .instance()
             .get(&DataKey::GlobalTotalRaised)
             .unwrap_or(0);
-        env.storage()
-            .instance()
-            .set(&DataKey::GlobalTotalRaised, &gr.checked_add(xlm_equivalent).expect("GlobalTotalRaised overflow"));
+        env.storage().instance().set(
+            &DataKey::GlobalTotalRaised,
+            &gr.checked_add(xlm_equivalent)
+                .expect("GlobalTotalRaised overflow"),
+        );
 
         let gc: i128 = env
             .storage()
             .instance()
             .get(&DataKey::GlobalCO2OffsetGrams)
             .unwrap_or(0);
-        env.storage()
-            .instance()
-            .set(&DataKey::GlobalCO2OffsetGrams, &gc.checked_add(co2_increment).expect("GlobalCO2 overflow"));
+        env.storage().instance().set(
+            &DataKey::GlobalCO2OffsetGrams,
+            &gc.checked_add(co2_increment).expect("GlobalCO2 overflow"),
+        );
 
         // Update schedule next execution sequence
         recurring.next_execution_ledger = env
@@ -3210,13 +3271,23 @@ impl IndigoPayContract {
 
         // 2. Transfer incentive to keeper
         if recurring.keeper_incentive > 0 {
-            token_client.transfer_from(&contract_addr, &donor, &keeper, &recurring.keeper_incentive);
+            token_client.transfer_from(
+                &contract_addr,
+                &donor,
+                &keeper,
+                &recurring.keeper_incentive,
+            );
         }
 
         // Publish execute event
         env.events().publish(
             (symbol_short!("rec_exec"), donor, recurring_id),
-            (keeper, recurring.amount, recurring.currency, recurring.next_execution_ledger),
+            (
+                keeper,
+                recurring.amount,
+                recurring.currency,
+                recurring.next_execution_ledger,
+            ),
         );
 
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
@@ -3693,7 +3764,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Only badge holders (Seedling or above) or active delegates can vote")]
+    #[should_panic(
+        expected = "Only badge holders (Seedling or above) or active delegates can vote"
+    )]
     fn test_non_badge_holder_cannot_vote() {
         let (env, _cid, client, admin, pid) = setup();
         client.create_proposal(&signers1(&env, &admin), &pid, &0u32);
@@ -5658,7 +5731,7 @@ mod tests {
     fn test_create_recurring_success() {
         let (env, _cid, client, _admin, pid) = setup();
         let donor = Address::generate(&env);
-        
+
         let recurring_id = client.create_recurring(
             &donor,
             &pid,
@@ -5668,7 +5741,7 @@ mod tests {
             &STROOP,
             &1u32,
         );
-        
+
         assert_eq!(recurring_id, 0);
         let recurring = client.get_recurring(&donor, &0u32);
         assert_eq!(recurring.donor, donor);
@@ -5757,7 +5830,7 @@ mod tests {
             &STROOP,
             &1u32,
         );
-        
+
         client.cancel_recurring(&donor, &recurring_id);
         let recurring = client.get_recurring(&donor, &recurring_id);
         assert!(!recurring.active);
@@ -5777,7 +5850,7 @@ mod tests {
             &STROOP,
             &1u32,
         );
-        
+
         client.cancel_recurring(&donor, &recurring_id);
         client.cancel_recurring(&donor, &recurring_id);
     }
@@ -5795,10 +5868,12 @@ mod tests {
         let (env, _cid, client, admin, pid) = setup();
         let donor = Address::generate(&env);
         let keeper = Address::generate(&env);
-        
+
         // Setup mock native token
         let token_admin = Address::generate(&env);
-        let native_token = env.register_stellar_asset_contract_v2(token_admin).address();
+        let native_token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
         client.set_native_token(&admin, &native_token);
 
         // Mint and approve native tokens
@@ -5849,7 +5924,7 @@ mod tests {
         let (env, _cid, client, admin, pid) = setup();
         let donor = Address::generate(&env);
         let keeper = Address::generate(&env);
-        
+
         // Setup mock USDC token
         let usdc_admin = Address::generate(&env);
         let usdc_token = env.register_stellar_asset_contract_v2(usdc_admin).address();
@@ -5937,7 +6012,7 @@ mod tests {
         );
 
         client.cancel_recurring(&donor, &recurring_id);
-        
+
         let matured_ledger = env.ledger().sequence() + 100;
         env.ledger().set_sequence_number(matured_ledger);
 
@@ -5953,7 +6028,9 @@ mod tests {
 
         // Setup mock native token
         let token_admin = Address::generate(&env);
-        let native_token = env.register_stellar_asset_contract_v2(token_admin).address();
+        let native_token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
         client.set_native_token(&admin, &native_token);
 
         let recurring_id = client.create_recurring(
@@ -6006,14 +6083,18 @@ mod tests {
         let (env, _cid, client, admin, pid) = setup();
         let donor = Address::generate(&env);
         let keeper = Address::generate(&env);
-        
+
         let token_admin = Address::generate(&env);
-        let native_token = env.register_stellar_asset_contract_v2(token_admin).address();
+        let native_token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
         client.set_native_token(&admin, &native_token);
 
         let native_client = StellarAssetClient::new(&env, &native_token);
-        native_client.mint(&donor, &(1500 * STROOP));
-        native_client.approve(&donor, &client.address, &(1500 * STROOP), &9999u32);
+        // 500 XLM × 3 executions = 1 500 XLM donation + 1 XLM × 3 = 3 XLM keeper
+        // incentives = 1 503 XLM total to cover all transfer_from calls.
+        native_client.mint(&donor, &(1503 * STROOP));
+        native_client.approve(&donor, &client.address, &(1503 * STROOP), &9999u32);
 
         // 500 XLM intervals
         let recurring_id = client.create_recurring(
@@ -6074,11 +6155,11 @@ mod tests {
 
         let recurrings = client.get_donor_recurrings(&donor);
         assert_eq!(recurrings.len(), 2);
-        
+
         let sub_0 = recurrings.get(0).unwrap();
         assert_eq!(sub_0.amount, 10 * STROOP);
         assert_eq!(sub_0.currency, symbol_short!("XLM"));
-        
+
         let sub_1 = recurrings.get(1).unwrap();
         assert_eq!(sub_1.amount, 20 * STROOP);
         assert_eq!(sub_1.currency, symbol_short!("USDC"));

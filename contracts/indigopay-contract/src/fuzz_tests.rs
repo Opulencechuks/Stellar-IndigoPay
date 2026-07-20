@@ -20,6 +20,7 @@
 ///   FUZZ_ITERATIONS=1000 cargo test --features testutils -- fuzz
 #[cfg(all(test, feature = "testutils"))]
 mod fuzz {
+    extern crate alloc;
     extern crate std;
 
     use crate::{
@@ -29,7 +30,8 @@ mod fuzz {
     use proptest::prelude::*;
     use soroban_sdk::Vec;
     use soroban_sdk::{
-        testutils::Address as _, token::StellarAssetClient, Address, Env, String as SorobanString,
+        testutils::Address as _, testutils::Ledger, token::StellarAssetClient, Address, Env,
+        String as SorobanString,
     };
 
     /// Helper: create a single-element signer Vec for admin calls.
@@ -1101,7 +1103,7 @@ mod fuzz {
             usdc_amount: i128,
         },
         /// Register a new project: name_suffix, co2_rate
-        RegisterProject { name: String, co2_rate: u32 },
+        RegisterProject { name: SorobanString, co2_rate: u32 },
         /// Pause a project by index
         PauseProject { project_idx: usize },
         /// Resume a project by index
@@ -1144,36 +1146,44 @@ mod fuzz {
 
         prop_oneof![
             // Donate XLM: weighted higher since it's the most common operation
-            8 => (project_idx.clone(), donor_idx.clone(), amount.clone())
+            8 => (0..num_projects, 0..num_donors, donation_amount_strategy())
                 .prop_map(|(pi, di, a)| ContractAction::Donate {
                     project_idx: pi, donor_idx: di, amount: a
-                }),
+                })
+                .boxed(),
             // Donate USDC: moderate weight for multi-currency path coverage
-            2 => (project_idx.clone(), donor_idx.clone(), amount.clone())
+            2 => (0..num_projects, 0..num_donors, donation_amount_strategy())
                 .prop_map(|(pi, di, a)| ContractAction::DonateUsdc {
                     project_idx: pi, donor_idx: di, usdc_amount: a
-                }),
+                })
+                .boxed(),
             // Register project (less frequent)
-            1 => ("[a-z]{3,10}", co2_rate.clone())
+            1 => ("[a-z]{3,10}", co2_rate_strategy())
                 .prop_map(|(name, cr)| ContractAction::RegisterProject {
-                    name, co2_rate: cr
-                }),
+                    name: SorobanString::from_str(&Env::default(), &name), co2_rate: cr
+                })
+                .boxed(),
             // Pause/resume (infrequent)
-            1 => project_idx.clone()
-                .prop_map(|pi| ContractAction::PauseProject { project_idx: pi }),
-            1 => project_idx.clone()
-                .prop_map(|pi| ContractAction::ResumeProject { project_idx: pi }),
+            1 => (0..num_projects)
+                .prop_map(|pi| ContractAction::PauseProject { project_idx: pi })
+                .boxed(),
+            1 => (0..num_projects)
+                .prop_map(|pi| ContractAction::ResumeProject { project_idx: pi })
+                .boxed(),
             // Governance (infrequent)
-            1 => (project_idx.clone(), (720u32..=518_400u32))
+            1 => (0..num_projects, 720u32..=518_400u32)
                 .prop_map(|(pi, d)| ContractAction::CreateProposal {
                     project_idx: pi, duration_ledgers: d
-                }),
-            2 => (project_idx.clone(), donor_idx.clone(), proptest::bool::ANY)
+                })
+                .boxed(),
+            2 => (0..num_projects, 0..num_donors, proptest::bool::ANY)
                 .prop_map(|(pi, di, a)| ContractAction::Vote {
-                    project_idx: pi, donor_idx: di, approve: a
-                }),
-            1 => project_idx.clone()
-                .prop_map(|pi| ContractAction::ResolveProposal { project_idx: pi }),
+                    project_idx: pi, voter_idx: di, approve: a
+                })
+                .boxed(),
+            1 => (0..num_projects)
+                .prop_map(|pi| ContractAction::ResolveProposal { project_idx: pi })
+                .boxed(),
         ]
     }
 
@@ -1215,12 +1225,12 @@ mod fuzz {
 
         let mut project_ids: std::vec::Vec<SorobanString> = std::vec::Vec::new();
         for i in 0..num_projects {
-            let pid = SorobanString::from_str(&env, &format!("proj-seq-{}", i));
+            let pid = SorobanString::from_str(&env, &alloc::format!("proj-seq-{}", i));
             let wallet = Address::generate(&env);
             client.register_project(
                 &admin,
                 &pid,
-                &SorobanString::from_str(&env, &format!("Seq Project {}", i)),
+                &SorobanString::from_str(&env, &alloc::format!("Seq Project {}", i)),
                 &wallet,
                 &50u32,
             );
@@ -1676,7 +1686,7 @@ mod fuzz {
                 );
                 prop_assert!(result.is_err(),
                     "pause_project should panic when project is deactivated");
-                return;
+                return Ok(());
             }
 
             if pause_active {
@@ -1813,19 +1823,15 @@ mod fuzz {
                         prop_assert!(dc >= prev_donation_count,
                             "Donation count decreased");
                         prev_donation_count = dc;
-                    }
-                    ContractAction::RegisterProject { name, co2_rate } => {
-                        let pid = SorobanString::from_str(
-                            &_env,
-                            &format!("fuzz-seq-{}", name),
-                        );
+                    }                    ContractAction::RegisterProject { name, co2_rate } => {
+                        let pid = name.clone();
                         let wallet = Address::generate(&_env);
                         let result = std::panic::catch_unwind(
                             std::panic::AssertUnwindSafe(|| {
                                 client.register_project(
                                     &admin, &pid,
-                                    &SorobanString::from_str(&_env, &name),
-                                    &wallet, co2_rate,
+                                    &pid,
+                                    &wallet, &co2_rate,
                                 );
                             }),
                         );

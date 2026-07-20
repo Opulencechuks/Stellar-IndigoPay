@@ -20,6 +20,7 @@ import InstallPrompt from "@/components/InstallPrompt";
 import { syncQueuedDonations } from "@/lib/offlineDonationQueue";
 import { recordDonation } from "@/lib/api";
 import { initAnalytics, trackEvent } from "@/lib/analytics";
+import { inter, display } from "@/lib/fonts";
 import "@/styles/globals.css";
 
 // ThemeTiedToaster keeps the sonner toast palette in sync with the
@@ -112,6 +113,10 @@ export default function App({ Component, pageProps }: AppProps) {
                   content="width=device-width, initial-scale=1"
                 />
               </Head>
+              {/* Font variable injection — next/font injects CSS custom properties
+                  so Tailwind can reference them. Apply to the outermost wrapper
+                  consumed by the ThemeProvider's rendered div. */}
+              <div className={`${inter.variable} ${display.variable}`}>
               <ConnectivityBanner isOnline={isOnline} />
               <SkipToContent />
               <main id="main-content" tabIndex={-1}>
@@ -131,6 +136,7 @@ export default function App({ Component, pageProps }: AppProps) {
               <CookieConsent />
               <InstallPrompt />
               <ThemeTiedToaster />
+              </div>
               </WalletProvider>
             </PriceProvider>
           </I18nProvider>
