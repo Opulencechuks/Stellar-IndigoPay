@@ -6,10 +6,10 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../db/pool");
-const redis = require("../services/redis");
+const { cacheResponse } = require("../middleware/cache");
 
-const GLOBAL_STATS_CACHE_KEY = "stats:global";
-const GLOBAL_STATS_CACHE_TTL_SECONDS = 60;
+const GLOBAL_STATS_CACHE_KEY = "cache:v1:stats:global";
+const GLOBAL_STATS_CACHE_TTL_SECONDS = 300;
 
 function mapGlobalStatsRow(row = {}) {
   return {
@@ -22,18 +22,8 @@ function mapGlobalStatsRow(row = {}) {
 }
 
 // GET /api/stats/global
-router.get("/global", async (req, res, next) => {
+router.get("/global", cacheResponse(300, () => GLOBAL_STATS_CACHE_KEY), async (req, res, next) => {
   try {
-    const cached = await redis.get(GLOBAL_STATS_CACHE_KEY);
-    if (cached) {
-      return res.json(cached);
-    }
-
-    // Global stats are served from the `projection_global_stats`
-    // materialised view, maintained by the projection engine from the
-    // `donation_events` event store. totalProjects is still read from the
-    // authoritative `projects` table (project registration is not yet an
-    // event-sourced aggregate).
     const result = await pool.query(`
       SELECT
         g.total_xlm_raised::text                                                   AS "totalXLMRaised",
@@ -46,12 +36,6 @@ router.get("/global", async (req, res, next) => {
     `);
 
     const stats = mapGlobalStatsRow(result.rows[0]);
-    await redis.set(
-      GLOBAL_STATS_CACHE_KEY,
-      stats,
-      GLOBAL_STATS_CACHE_TTL_SECONDS,
-    );
-
     res.json(stats);
   } catch (e) {
     next(e);
