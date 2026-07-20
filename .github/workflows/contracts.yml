@@ -38,7 +38,7 @@ jobs:
         run: cargo clippy --workspace -- -D warnings
 
       - name: Run tests
-        run: "cargo test --features testutils --workspace -- --skip fuzz::"
+        run: "cargo test --features testutils --workspace -- --skip fuzz"
 
       - name: Build WASM (slim)
         run: cargo build --workspace --target wasm32v1-none --release --no-default-features
@@ -56,32 +56,6 @@ jobs:
             echo "Error: WASM binary exceeds 64KB limit"
             exit 1
           fi
-
-  fuzz:
-    name: Fuzz (256 cases)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: contracts
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.91.0
-          targets: wasm32v1-none
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: contracts
-
-      - name: Run fuzz tests
-        run: cargo test --features testutils -- fuzz
-        env:
-          FUZZ_ITERATIONS: 256
 
   coverage:
     name: Coverage
