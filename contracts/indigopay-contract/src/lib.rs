@@ -3,10 +3,6 @@
 // Suppressing this warning so clippy -- -D warnings still passes.
 // TODO(indigopay-272): migrate to #[contractevent] pattern.
 #![allow(deprecated)]
-#[cfg(all(test, feature = "testutils"))]
-mod fuzz_template;
-#[cfg(all(test, feature = "testutils"))]
-mod fuzz_tests;
 
 /**
  * contracts/indigopay-contract/src/lib.rs
